@@ -1,0 +1,127 @@
+<?php
+
+$class = new ImageLayers([
+    'https://{твой домен}/images/backgrounds/md-bg-1.png', //будет подложкой, остальные накладываются сверху
+    'https://{твой домен}/images/items/md-it-1.png',
+    'https://{твой домен}/images/texts/md-tx-1.png',
+    'https://{твой домен}/images/accessories/md-acc-1.png'
+], 512, 512);
+
+$response= $class->exec();
+
+class ImageLayers
+{
+    const ALLOW_HOSTS= [ //картинки разрешены только с этих доменов
+        '{твой домен}',
+        '{твой домен2}',
+    ];
+
+    const UPLOAD_DIR= 'upload/events/postcards/';//куда заливать готовые изображения
+
+    protected $urlImages;
+    protected $resources= [];
+    protected $width;
+    protected $height;
+
+
+    public function __construct(array $urlImages, int $width, int $height)
+    {
+        $this->urlImages = $urlImages;
+        $this->width= $width;
+        $this->height= $height;
+    }
+
+    protected function createResourceImages(): array
+    {
+        foreach ($this->urlImages as $url) {
+            if( !in_array(parse_url($url, PHP_URL_HOST), self::ALLOW_HOSTS) )continue;
+
+            try {
+                $this->resources[] = imagecreatefromstring(file_get_contents($url));
+            } catch (\Exception $e) {}
+        }
+        return $this->resources;
+    }
+
+    /**
+     * $this->resources[0] будет подложкой для всех остальных
+     */
+    protected function createCanvas(): void
+    {
+        $resultImg = imagecreatetruecolor($this->width, $this->height);
+        imagealphablending($resultImg, false);
+        imagesavealpha($resultImg, true);
+
+
+        imagecopy($resultImg, $this->resources[0], 0, 0, 0, 0, $this->width, $this->height);
+        imagedestroy($this->resources[0]);
+
+
+        $this->resources[0] = imagecreatetruecolor($this->width, $this->height);
+        imagealphablending($this->resources[0], false);
+        imagesavealpha($this->resources[0], true);
+
+        imagecopyresampled($this->resources[0], $resultImg, 0, 0, 0, 0, $this->width, $this->height, $this->width, $this->height);
+        imagedestroy($resultImg);
+
+        imagealphablending($this->resources[0], 1);
+        imagesavealpha($this->resources[0], 1);
+    }
+
+    /**
+     * Добавить слои к подложке
+     */
+    protected function appendLayers(): void
+    {
+        $length = count($this->resources);
+        for ($i = 1; $i < $length; $i++) {
+            imagealphablending($this->resources[$i], 1);
+            imagesavealpha($this->resources[$i], 1);
+            imagecopyresampled($this->resources[0], $this->resources[$i], 0, 0, 0, 0, $this->width, $this->width, $this->width, $this->height);
+            imagedestroy($this->resources[$i]);
+        }
+    }
+
+    public function exec(): ?string
+    {
+        if( is_file($this->getResultPathLocal()) )return $this->getResultUrl();//почти как кеш
+
+        if (!$this->createResourceImages()) return null;
+
+        $this->createCanvas();
+        $this->appendLayers();
+        return $this->buildImages();
+    }
+
+    /**
+     * Сохранить изображение из ресурса
+     * @return string|null
+     */
+    protected function buildImages(): ?string
+    {
+        //header('Content-Type: image/png'); imagepng($this->resources[0]); exit; //разкоментировав можно выести результатирующее изображение на экран без сохранения в файл
+        $isSuccess= imagepng($this->resources[0], $this->getResultPathLocal());
+        imagedestroy($this->resources[0]);
+
+        if($isSuccess != true)return null;
+
+        return $this->getResultUrl();
+    }
+
+    public function getResultPathLocal(): string
+    {
+        return $_SERVER['DOCUMENT_ROOT'] . '/' . self::UPLOAD_DIR . $this->getResultImageName();
+    }
+
+    public function getResultUrl(): string
+    {
+        $scheme= $_SERVER['REQUEST_SCHEME'] == 'http' ? 'http://' : 'https://';
+        $domain= $_SERVER['HTTP_HOST'];
+        return $scheme. $domain. '/' . self::UPLOAD_DIR . $this->getResultImageName();
+    }
+
+    protected function getResultImageName(): string
+    {
+        return md5(json_encode($this->urlImages)) . '.png';
+    }
+}
